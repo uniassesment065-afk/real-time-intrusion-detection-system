@@ -15,7 +15,6 @@ AI_IDPS_PROJECT is an AI-Powered Intrusion Detection and Prevention System for *
 
 ## Features
 - Upload and parse PCAP files offline.
-- Generate Zeek logs automatically.
 - Feature extraction for ML analysis.
 - Detect benign and malicious flows with LightGBM.
 - SHAP explainability for alerts.
