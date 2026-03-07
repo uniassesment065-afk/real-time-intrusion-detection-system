@@ -1,13 +1,11 @@
-"""
-dashboard.py — AI-IDS Streamlit dashboard (PRO UI)
-- Full file: theme-safe CSS, section borders, sidebar theme fix, helper wrappers.
-- Lightweight: requires streamlit, pandas, joblib, altair (optional).
-"""
+# dashboard.py — Redesigned AI-IDS Streamlit dashboard (updated & fixed)
+# Drop this file into your app folder and run: streamlit run dashboard.py
 
 import os
 import json
+import tempfile
 import joblib
-from typing import Optional
+from typing import Optional, List
 
 import pandas as pd
 import streamlit as st
@@ -21,167 +19,151 @@ st.set_page_config(page_title="AI Intrusion Detection System", page_icon="🛡�
 MODEL_PATH = os.path.join("models", "ids_model.pkl")
 DEFAULT_PCAP = os.path.join("sample_pcaps", "2026-02-28-traffic-analysis-exercise.pcap")
 EXPECTED_FEATURES = 42
+MAX_TOP_ROWS = 500
 
-# ---------- Theme selector ----------
-with st.sidebar:
-    ui_theme = st.selectbox("UI Theme", ["Soft-Dark (recommended)", "Light (high-contrast)"], index=0)
+# ---------- Helper: safe cache clear ----------
+def clear_model_cache():
+    """
+    Try various cache clearing approaches so we don't crash on Streamlit versions
+    that don't have certain APIs. Also clear common session_state keys used
+    by previous runs.
+    """
+    # Remove common session_state keys we might have used
+    for key in ["loaded_model", "model_cached", "model"]:
+        if key in st.session_state:
+            try:
+                del st.session_state[key]
+            except Exception:
+                pass
 
-# ---------- Unified CSS (cards, grid, badges, responsive) ----------
+    # Try modern cache clearing APIs but don't crash if they aren't present
+    try:
+        # recommended for resources (Streamlit >= 1.18-ish)
+        st.cache_resource.clear()
+    except Exception:
+        try:
+            # older cache API
+            st.experimental_memo.clear()
+        except Exception:
+            try:
+                st.cache_data.clear()
+            except Exception:
+                # last resort: do nothing — we've already cleared session_state keys
+                pass
+
+# ---------- CSS & themes ----------
 _COMMON_CSS = r"""
 <style>
-:root{ --accent1: #4f6ef6; --accent2: #0fb6b0; --muted: rgba(0,0,0,0.45); --section-border: rgba(255,255,255,0.06); }
+:root{
+  --accent1: #0b76ff;
+  --accent2: #00b894;
+  --card-bg: rgba(255,255,255,0.02);
+  --muted-dark: #9fb4d8;
+  --muted-light: #475569;
+}
 
 /* Layout containers */
 .card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 18px; }
-.summary-card { border-radius: 14px; padding: 14px; position: relative; overflow: hidden; min-height: 96px; }
-.summary-card .title { font-size: 0.95rem; font-weight: 600; margin-bottom: 6px; }
-.summary-card .value { font-size: 1.6rem; font-weight: 700; }
-.summary-card .sub { font-size: 0.85rem; color: var(--muted); }
-.badge { display:inline-block; padding:6px 10px; border-radius:999px; font-size:0.8rem; font-weight:600; }
+.summary-card { border-radius: 12px; padding: 12px; position: relative; overflow: hidden; min-height: 88px; }
+.summary-card .title { font-size: 0.9rem; font-weight: 700; margin-bottom: 6px; }
+.summary-card .value { font-size: 1.55rem; font-weight: 800; }
+.summary-card .sub { font-size: 0.82rem; color: var(--muted, rgba(0,0,0,0.45)); }
 
-/* glass border effect */
-.summary-card::after{ content: ""; position:absolute; right:-60px; top:-40px; width:160px; height:160px; opacity:0.08; transform:rotate(25deg); }
-
-/* New: section wrapper (borders/left accent) */
-.section-card {
-  border-radius: 12px;
-  padding: 14px;
-  margin-bottom: 16px;
-  border: 1px solid var(--section-border);
-  background: linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.005));
-  box-shadow: 0 6px 20px rgba(2,6,23,0.12);
-  position: relative;
-  transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease;
-  overflow: hidden;
-}
-/* Left accent for sections */
-.section-card::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 6px;
-  background: linear-gradient(180deg, var(--accent1), var(--accent2));
-  border-top-left-radius: 12px;
-  border-bottom-left-radius: 12px;
-  opacity: 0.98;
-}
-
-/* Small hover lift for desktop */
-.section-card:hover { transform: translateY(-3px); box-shadow: 0 10px 34px rgba(2,6,23,0.18); }
-
-/* Specific small helpers */
-.controls-card { padding-top: 10px; padding-bottom: 12px; }
-.header-card { display:block; margin-bottom:12px; }
-.chart-card { min-height:220px; }
-
-/* stripe + accents */
-.stripe { height:6px; border-radius:6px; margin-bottom:8px; }
-.stripe.accent { background: linear-gradient(90deg,var(--accent1),var(--accent2)); }
-
-/* Table header tweaks (kept conservative) */
-div[data-testid="stDataFrameContainer"] table thead th { font-weight:600; }
-
-/* Light/dark theme base */
-.soft-dark .stApp { background: linear-gradient(90deg,#07182a 0%, #041022 100%) !important; color: #d4e8ff !important; }
-.soft-dark .summary-card { background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01)); box-shadow: 0 8px 30px rgba(2,6,23,0.6); color: #d4e8ff; }
-.soft-dark .summary-card::after { background: radial-gradient(circle at 30% 20%, var(--accent1), transparent 40%); }
-.soft-dark .badge { color: #041022; }
-.soft-dark { --muted: #9fb4d8; --section-border: rgba(255,255,255,0.06); }
-
-/* Light theme overrides */
-.light .stApp { background: #ffffff !important; color: #121826 !important; }
-.light .summary-card { background: linear-gradient(180deg,#ffffff,#f7f9fb); box-shadow: 0 6px 18px rgba(16,24,40,0.06); color: #0f1724; }
-.light .summary-card::after { background: radial-gradient(circle at 30% 20%, var(--accent2), transparent 40%); }
-.light { --muted: #475569; --section-border: rgba(15,23,36,0.06); }
-
-/* IMPORTANT: Sidebar styling (sidebar is outside .stApp, so target it explicitly) */
-.soft-dark div[data-testid="stSidebar"] { background: linear-gradient(180deg,#041022,#07182a) !important; color: #d4e8ff !important; }
-.soft-dark div[data-testid="stSidebar"] .stTitle { color: #d4e8ff !important; }
-.light div[data-testid="stSidebar"] { background: #ffffff !important; color: #0f1724 !important; }
-
-/* Streamlit block container tweaks so borders and section backgrounds look consistent */
-.soft-dark .block-container, .light .block-container {
-  padding: 20px 24px;
-  border-radius: 0px;
-  background: transparent;
-}
+.kpi-row { display:flex; gap:10px; align-items:center; }
+.kpi-small { font-size:0.9rem; color:var(--muted); }
 
 /* small responsive tweaks */
-@media (max-width:880px){ .card-grid { grid-template-columns: 1fr; } .section-card::before { width: 4px; } }
+@media (max-width:880px){ .card-grid { grid-template-columns: 1fr; } }
 </style>
 """
 
-# Optional tiny theme extras (kept separate)
-_SOFT_DARK_EXTRA = """
+# theme css fragments
+_DARK_CSS = """
 <style>
-:root{ --muted: #9fb4d8; }
+:root{ --muted: #9fb4d8; --card-bg: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01)); }
+.stApp { background: linear-gradient(180deg,#041022,#07182a) !important; color: #e6f0ff !important; }
+.summary-card { background: var(--card-bg); box-shadow: 0 8px 30px rgba(2,6,23,0.6); color: #e6f0ff; }
 </style>
 """
 
-_LIGHT_EXTRA = """
+_LIGHT_CSS = """
 <style>
-:root{ --muted: #475569; }
+:root{ --muted: #475569; --card-bg: linear-gradient(180deg,#ffffff,#f7f9fb); }
+.stApp { background: linear-gradient(180deg,#f8fafc,#eef2ff) !important; color: #071023 !important; }
+.summary-card { background: var(--card-bg); box-shadow: 0 6px 18px rgba(16,24,40,0.06); color: #071023; }
 </style>
 """
 
-# ---------- Inject theme wrapper and CSS ----------
-# open a wrapper div to toggle between .soft-dark and .light classes
-if ui_theme.startswith("Soft"):
-    st.markdown('<div class="soft-dark">', unsafe_allow_html=True)
-    st.markdown(_COMMON_CSS + _SOFT_DARK_EXTRA, unsafe_allow_html=True)
-else:
-    st.markdown('<div class="light">', unsafe_allow_html=True)
-    st.markdown(_COMMON_CSS + _LIGHT_EXTRA, unsafe_allow_html=True)
+_PRO_BG_CSS = """
+<style>
+/* subtle textured professional background - accessible contrast */
+body > div[role="application"] {
+  background-image:
+    radial-gradient(circle at 10% 10%, rgba(11,118,255,0.03), transparent 10%),
+    linear-gradient(180deg, rgba(3,10,20,0.6), rgba(3,10,20,0.85));
+  background-attachment: fixed;
+}
+</style>
+"""
 
-# ---------- Helper functions to reduce wrapper repetition ----------
-
-def section_open(extra_class: str = ""):
-    cls = f"section-card {extra_class}".strip()
-    st.markdown(f'<div class="{cls}">', unsafe_allow_html=True)
-
-
-def section_close():
-    st.markdown('</div>', unsafe_allow_html=True)
-
-# ---------- Utilities (unchanged, but clearer typing) ----------
+# ---------- Model loading with caching ----------
 @st.cache_resource
 def load_model(path: str = MODEL_PATH):
     if not os.path.exists(path):
         raise FileNotFoundError(path)
+    # joblib.load may return a scikit-learn-ish model or a custom object
     return joblib.load(path)
 
-
+# ---------- Prediction helpers ----------
 def safe_predict(model, X: pd.DataFrame):
+    """
+    Return (probs:list[float], preds_int:list[int]).
+    Handles models without predict_proba gracefully.
+    """
     if not isinstance(X, pd.DataFrame):
         X = pd.DataFrame(X)
     X_proc = X.copy().fillna(0)
+
+    # attempt predict_proba -> handle binary / single-dim outputs
     try:
         proba = model.predict_proba(X_proc)
-        if getattr(proba, "ndim", 1) == 1:
+        # proba shape handling: if shape is (n,) or (n,1) handle carefully
+        if hasattr(proba, "ndim") and proba.ndim == 1:
             probs = [float(p) for p in proba]
         else:
-            probs = [float(p) for p in proba[:, 1]]
+            # standard sklearn: choose column 1 as 'positive' class
+            try:
+                probs = [float(p) for p in proba[:, 1]]
+            except Exception:
+                # fallback to first col if only one column present
+                probs = [float(p) for p in proba[:, 0]]
     except Exception:
+        # fallback to predict -> turn into 0.0/1.0 probabilities
         try:
             preds = model.predict(X_proc)
             probs = [1.0 if int(p) == 1 else 0.0 for p in preds]
         except Exception:
             probs = [0.0] * len(X_proc)
+
     preds_int = [1 if (p is not None and p >= 0.5) else 0 for p in probs]
     return probs, preds_int
 
-
 def pad_features(df: pd.DataFrame, expected_cols: int = EXPECTED_FEATURES) -> pd.DataFrame:
+    """
+    Ensures dataframe has at least expected_cols columns. Adds deterministic dummy names.
+    """
     if not isinstance(df, pd.DataFrame):
         df = pd.DataFrame(df)
     cur = df.shape[1]
     if cur < expected_cols:
         for i in range(expected_cols - cur):
-            df[f"dummy_{i}"] = 0
+            col_name = f"dummy_{i}"
+            # only add column if not present
+            if col_name not in df.columns:
+                df[col_name] = 0
+    # Ensure column order deterministic
+    df = df.reindex(sorted(df.columns), axis=1)
     return df
-
 
 def map_severity_by_prob(prob: float) -> str:
     if prob >= 0.9:
@@ -192,13 +174,16 @@ def map_severity_by_prob(prob: float) -> str:
         return "LOW"
     return "NORMAL"
 
-# ---------- Sidebar controls (wrapped) ----------
+# ---------- Sidebar (controls & theme) ----------
 with st.sidebar:
-    section_open("controls-card")
-
     st.title("⚙️ Controls")
+    ui_theme = st.selectbox("UI Theme", ["Soft-Dark (recommended)", "Light (high-contrast)"], index=0)
+    background_style = st.selectbox("Background", ["Professional gradient (recommended)", "Plain"], index=0)
+
+    st.markdown("---")
     label_preset = st.selectbox("Label Preset",
-                                ["Binary (BENIGN / MALICIOUS)", "Severity (NORMAL/LOW/MEDIUM/HIGH)", "Custom labels"], index=0)
+                                ["Binary (BENIGN / MALICIOUS)", "Severity (NORMAL/LOW/MEDIUM/HIGH)", "Custom labels"],
+                                index=0)
     custom_label_0 = None
     custom_label_1 = None
     if label_preset == "Custom labels":
@@ -207,20 +192,24 @@ with st.sidebar:
 
     threshold = st.slider("Probability threshold (suspicious)", 0.0, 1.0, 0.60, 0.01)
     prob_filter = st.slider("Show flows with prob >=", 0.0, 1.0, 0.0, 0.01)
-    top_n = st.number_input("Top N suspicious flows", min_value=5, max_value=500, value=20)
+    top_n = int(st.number_input("Top N suspicious flows", min_value=5, max_value=MAX_TOP_ROWS, value=20))
     show_raw = st.checkbox("Show raw features (large)", value=False)
     highlight_suspicious = st.checkbox("Highlight suspicious rows", value=True)
     run_on_upload = st.checkbox("Auto-run detection on upload", value=True)
 
     st.markdown("---")
     if st.button("Clear cached model"):
-        try:
-            st.cache_resource.clear()
-        except Exception:
-            st.session_state.pop("loaded_model", None)
+        # Safe clear (no AttributeError risk)
+        clear_model_cache()
+        # ensure model variable is removed from session and rerun
         st.experimental_rerun()
 
-    section_close()
+# ---------- Inject CSS per theme ----------
+st.markdown(_COMMON_CSS, unsafe_allow_html=True)
+if ui_theme.startswith("Soft"):
+    st.markdown(_DARK_CSS + (_PRO_BG_CSS if background_style.startswith("Professional") else ""), unsafe_allow_html=True)
+else:
+    st.markdown(_LIGHT_CSS + ("" if background_style == "Plain" else _PRO_BG_CSS), unsafe_allow_html=True)
 
 # ---------- Load model ----------
 try:
@@ -233,42 +222,43 @@ except Exception as e:
     model = None
 
 # ---------- Header / Upload area ----------
-section_open()
-st.markdown("""
-# 🛡️ AI-Powered Intrusion Detection System
-Upload a PCAP, choose a label scheme, and run detection. The dashboard is responsive and organized into clear sections.
-""")
+st.markdown("# 🛡️ AI-Powered Intrusion Detection System")
+st.markdown("Upload a PCAP, choose label scheme and run detection. The dashboard focuses on readable, accessible statistics.")
 
 left, right = st.columns([2, 1])
 with left:
-    section_open()
     st.subheader("1) Upload PCAP")
-    uploaded = st.file_uploader("Upload PCAP (.pcap)", type=["pcap"]) 
-    sample_choice = st.selectbox("Or choose sample", ["Default sample (recommended)", "No sample / upload only"]) 
+    uploaded = st.file_uploader("Upload PCAP (.pcap)", type=["pcap"])
+    sample_choice = st.selectbox("Or choose sample", ["Default sample (recommended)", "No sample / upload only"])
+    pcap_path = None
     if uploaded is not None:
-        pcap_path = "temp_uploaded.pcap"
-        with open(pcap_path, "wb") as f:
-            f.write(uploaded.read())
+        # write to a temp file safely
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pcap")
+        tmp.write(uploaded.read())
+        tmp.flush()
+        tmp.close()
+        pcap_path = tmp.name
     else:
-        pcap_path = DEFAULT_PCAP if sample_choice.startswith("Default") else None
+        if sample_choice.startswith("Default"):
+            if os.path.exists(DEFAULT_PCAP):
+                pcap_path = DEFAULT_PCAP
+            else:
+                st.warning("Default sample PCAP not found on server.")
+                pcap_path = None
+
     st.markdown("**PCAP:**")
     st.write(pcap_path if pcap_path else "No PCAP selected")
-    section_close()
 
 with right:
-    section_open("header-card")
     st.subheader("Model & Quick Info")
-    st.markdown(f"""
+    model_info_html = f"""
     <div class="summary-card" style="padding:12px">
-      <div class="stripe accent"></div>
       <div class="title">Model Path</div>
-      <div class="value">{MODEL_PATH}</div>
+      <div class="value" title="{MODEL_PATH}">{os.path.basename(MODEL_PATH)}</div>
       <div class="sub">Threshold: {threshold:.2f}</div>
     </div>
-    """, unsafe_allow_html=True)
-    section_close()
-
-section_close()  # close outer header section wrapper
+    """
+    st.markdown(model_info_html, unsafe_allow_html=True)
 
 # ---------- Run logic ----------
 do_run = (run_on_upload and pcap_path is not None) or st.button("Extract & Predict ▶️")
@@ -314,6 +304,7 @@ if do_run and pcap_path and model is not None:
     normals = total - attacks
     attack_ratio = attacks / total if total else 0.0
 
+    # threat level
     if attack_ratio < 0.05:
         threat = "VERY LOW"
         color_emoji = "🟢"
@@ -327,128 +318,95 @@ if do_run and pcap_path and model is not None:
         threat = "HIGH"
         color_emoji = "🔴"
 
-    # ---- Summary cards in a neat grid ----
-    section_open()
+    # ---- Summary KPI cards ----
     st.markdown("<div class='card-grid'>", unsafe_allow_html=True)
-
-    st.markdown(
-        f"""
-        <div class='summary-card'>
-          <div class='stripe accent'></div>
-          <div class='title'>Total Flows</div>
-          <div class='value'>{total}</div>
-          <div class='sub'>Total parsed flows</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    st.markdown(
-        f"""
-        <div class='summary-card'>
-          <div class='stripe accent'></div>
-          <div class='title'>Benign / Normal</div>
-          <div class='value'>{normals}</div>
-          <div class='sub'>Non-alert flows</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    st.markdown(
-        f"""
-        <div class='summary-card'>
-          <div class='stripe accent'></div>
-          <div class='title'>Suspicious / Alerts</div>
-          <div class='value'>{attacks}</div>
-          <div class='sub'>Detected suspicious flows</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    st.markdown(
-        f"""
-        <div class='summary-card'>
-          <div class='stripe accent'></div>
-          <div class='title'>Threat Level</div>
-          <div class='value'>{threat} {color_emoji}</div>
-          <div class='sub'>{attack_ratio*100:.2f}% of flows</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
+    kpis = [
+        ("Total Flows", total, "Total parsed flows"),
+        ("Benign / Normal", normals, "Non-alert flows"),
+        ("Suspicious / Alerts", attacks, "Detected suspicious flows"),
+        ("Threat Level", f"{threat} {color_emoji}", f"{attack_ratio*100:.2f}% of flows"),
+    ]
+    for title, value, sub in kpis:
+        st.markdown(
+            f"""
+            <div class='summary-card'>
+              <div class='title'>{title}</div>
+              <div class='value'>{value}</div>
+              <div class='sub'>{sub}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
     st.markdown("</div>", unsafe_allow_html=True)
-    section_close()
 
-    # Charts + quick visualizations
-    section_open("chart-card")
+    # ---- Traffic overview charts ----
     st.markdown("## Traffic Overview")
-    dist_df = results.groupby("label").size().reset_index(name="count").sort_values("count", ascending=False)
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        try:
-            import altair as alt
-            chart = alt.Chart(results).mark_bar().encode(x=alt.X("label:N", sort="-y"), y="count()")
-            st.altair_chart(chart, use_container_width=True)
-        except Exception:
-            st.bar_chart(dist_df.set_index("label"))
+    try:
+        import altair as alt
+        # label distribution bar chart
+        label_counts = results.groupby("label").size().reset_index(name="count").sort_values("count", ascending=False)
+        bar = (
+            alt.Chart(label_counts)
+            .mark_bar()
+            .encode(x=alt.X("label:N", title="Label", sort="-y"), y=alt.Y("count:Q", title="Count"), tooltip=["label", "count"])
+            .properties(height=220)
+        )
+        st.altair_chart(bar, use_container_width=True)
+    except Exception:
+        st.bar_chart(results["label"].value_counts())
 
-    with col2:
-        st.markdown('<div class="summary-card">', unsafe_allow_html=True)
-        st.markdown(f"**Top suspicious (prob >= {prob_filter:.2f})**", unsafe_allow_html=True)
-        top_count = results[results["malicious_probability"] >= prob_filter].shape[0]
-        st.markdown(f"\n\n### {top_count} matching flows")
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    section_close()
-
-    section_open("chart-card")
+    # Probability distribution / histogram
     st.markdown("## Probability Distribution")
     try:
         import altair as alt
-        hist = alt.Chart(results).mark_bar().encode(x=alt.X("malicious_probability:Q", bin=alt.Bin(maxbins=40)), y='count()').properties(height=220)
+        hist = (
+            alt.Chart(results)
+            .mark_bar()
+            .encode(
+                x=alt.X("malicious_probability:Q", bin=alt.Bin(maxbins=40), title="Malicious probability"),
+                y=alt.Y("count():Q", title="Flows"),
+                tooltip=[alt.Tooltip("count()", title="Flows")]
+            )
+            .properties(height=220)
+        )
         st.altair_chart(hist, use_container_width=True)
     except Exception:
-        st.bar_chart(results['malicious_probability'].value_counts().sort_index())
-    section_close()
+        st.bar_chart(results["malicious_probability"].value_counts().sort_index())
 
-    section_open("chart-card")
+    # attack probability over sample
     st.markdown("## Attack Probability Over Sample (first 200 rows)")
     st.line_chart(results["malicious_probability"].head(200))
-    section_close()
 
-    # Interactive table
-    section_open()
+    # ---- Interactive table and top suspicious flows ----
     st.markdown("## Detected Flows — Interactive View")
     filtered = results[results["malicious_probability"] >= prob_filter].sort_values("malicious_probability", ascending=False)
     if filtered.shape[0] == 0:
         st.info("No flows match the current probability filter. Lower the filter or choose a different PCAP.")
     else:
         top = filtered.head(top_n).copy()
+        # Present a clean set of columns
+        display_cols = ["label", "malicious_probability", "prediction_int"] + [c for c in top.columns if c.startswith("dummy_")][:3]
+        display_cols = [c for c in display_cols if c in top.columns]
+        display_df = top[display_cols]
+
+        # highlight suspicious rows using Styler if available
         if highlight_suspicious:
             try:
-                styled = top.style.apply(lambda r: ["background-color: rgba(255,0,0,0.12)" if r["is_suspicious"] else "" for _ in r], axis=1)
+                styled = display_df.style.apply(lambda row: ["background-color: rgba(255,0,0,0.10)" if row["malicious_probability"] >= threshold else "" for _ in row], axis=1)
                 st.dataframe(styled, height=400)
             except Exception:
-                st.dataframe(top, height=400)
+                st.dataframe(display_df, height=400)
         else:
-            display_cols = ["label", "malicious_probability", "prediction_int"] + ([c for c in top.columns if c.startswith("dummy_")][:3])
-            st.dataframe(top[display_cols], height=400)
-    section_close()
+            st.dataframe(display_df, height=400)
 
-    # Inspect single flow / JSON view
-    section_open()
+    # ---- Inspect single flow / JSON view ----
     st.markdown("## Inspect a single flow / JSON view")
     idx = st.number_input("Row index (0-based)", 0, max(0, total - 1), 0)
     if total > 0:
         row = results.iloc[int(idx)].to_dict()
         st.json(row)
-    section_close()
 
-    # Export
-    section_open()
+    # ---- Export ----
     st.markdown("## Export results")
     csv_bytes = results.to_csv(index=False).encode("utf-8")
     json_str = results.to_json(orient="records", indent=2)
@@ -462,25 +420,18 @@ if do_run and pcap_path and model is not None:
 
     if show_raw:
         st.markdown("---")
-        st.subheader("Raw extracted features")
-        st.dataframe(df, height=300)
+        st.subheader("Raw extracted features (first 300 rows)")
+        st.dataframe(df.head(300))
 
     st.success("Detection completed ✅")
 
 else:
-    section_open()
-    st.markdown('<div class="summary-card" style="padding:14px">', unsafe_allow_html=True)
+    st.markdown("<div class='summary-card' style='padding:14px'>", unsafe_allow_html=True)
     st.markdown("## Welcome 👋")
     st.markdown(
         "This dashboard extracts features from PCAPs and runs a trained ML model to detect suspicious activity.\n\nUse the controls on the left to configure labels, thresholds and run detection.")
-    st.markdown('</div>', unsafe_allow_html=True)
-    section_close()
+    st.markdown("</div>", unsafe_allow_html=True)
 
-# close theme wrapper if opened
-if ui_theme.startswith("Soft"):
-    st.markdown('</div>', unsafe_allow_html=True)
-else:
-    st.markdown('</div>', unsafe_allow_html=True)
-
+# close message
 st.markdown("---")
 st.markdown("Made with ❤️ by the AI-IDS team")
