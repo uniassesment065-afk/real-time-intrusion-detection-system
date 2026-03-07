@@ -1,23 +1,25 @@
-# dashboard.py
 """
-AI-Powered Intrusion Detection — Interactive Streamlit Dashboard
-Add this file to your repo (replace your current dashboard file).
+dashboard.py — Improved AI-IDS Streamlit dashboard
+Features added:
+- Label presets dropdown (Binary, Severity, Custom)
+- Custom label inputs
+- Dark-theme text/metric fixes (high contrast)
+- Probability filter + top-N suspicious flows
+- Better UX (spinners, cached model load, safe predict)
+- Export JSON & CSV, copy JSON to clipboard
+Note: keeps using your pcap_feature_extractor.extract_features_from_pcap
 """
 
 import os
-import io
-import time
-import json
-import base64
-from typing import List, Optional
-
 import streamlit as st
 import pandas as pd
 import joblib
+import json
+from typing import Optional
 
-from pcap_feature_extractor import extract_features_from_pcap  # keep using your extractor
+from pcap_feature_extractor import extract_features_from_pcap
 
-# ---------- Page config and basic styling ----------
+# ---------- Config ----------
 st.set_page_config(
     page_title="AI Intrusion Detection System",
     page_icon="🛡️",
@@ -25,128 +27,198 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Custom CSS for nicer visuals
+MODEL_PATH = os.path.join("models", "ids_model.pkl")
+DEFAULT_PCAP = os.path.join("sample_pcaps", "2026-02-28-traffic-analysis-exercise.pcap")
+EXPECTED_FEATURES = 42  # keep this as your model expects
+
+# ---------- Styles (make text readable on dark background) ----------
 st.markdown(
     """
     <style>
-    /* Background gradient */
+    /* page background */
     .stApp {
-        background: linear-gradient(90deg, #0f172a 0%, #071634 40%, #041022 100%);
+        background: linear-gradient(90deg,#081224 0%, #041022 100%);
         color: #e6eef8;
     }
-    /* Card style for sections */
+
+    /* card look */
     .card {
         background: rgba(255,255,255,0.03);
         border-radius: 12px;
-        padding: 16px;
-        box-shadow: 0 4px 20px rgba(2,6,23,0.6);
-        margin-bottom: 16px;
+        padding: 12px;
+        margin-bottom: 12px;
+        box-shadow: 0 6px 24px rgba(0,0,0,0.45);
     }
-    /* Styled buttons */
+
+    /* ensure headings and general text are light */
+    .stMarkdown, .stText, .stHeader, .stSubheader, .stMetric {
+        color: #e6eef8 !important;
+    }
+
+    /* metric label & value color adjustments */
+    .stMetric .metric-label, .stMetric .metric-value {
+        color: #e6eef8 !important;
+    }
+
+    /* dataframe: header and cells */
+    div[data-testid="stDataFrameContainer"] table thead th {
+        color: #e6eef8 !important;
+        background: rgba(255,255,255,0.03) !important;
+    }
+    div[data-testid="stDataFrameContainer"] table tbody td {
+        color: #e6eef8 !important;
+        background: rgba(255,255,255,0.02) !important;
+    }
+
+    /* buttons */
     .stButton>button {
-        background-image: linear-gradient(90deg,#6366f1,#06b6d4);
-        color: white;
-        border: none;
+        background-image: linear-gradient(90deg,#6366f1,#06b6d4) !important;
+        color: white !important;
+        border: none !important;
     }
-    /* Smaller footer text */
+
+    /* small footers */
     .footer {
         color: #9aaed6;
         font-size: 0.9em;
         margin-top: 12px;
     }
-    /* Make dataframe container have rounded corners */
-    div[data-testid="stDataFrameContainer"] > div {
-        border-radius: 8px;
-        overflow: hidden;
-    }
+
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# ---------- Helper utilities ----------
-
-MODEL_PATH = os.path.join("models", "ids_model.pkl")
-DEFAULT_PCAP = os.path.join("sample_pcaps", "2026-02-28-traffic-analysis-exercise.pcap")
-
+# ---------- Utilities ----------
 @st.cache_resource
 def load_model(path: str = MODEL_PATH):
-    """Load model once and cache it for the session."""
+    """Load and cache the model. Raises FileNotFoundError if missing."""
     if not os.path.exists(path):
-        raise FileNotFoundError(f"Model not found at {path}")
+        raise FileNotFoundError(path)
     return joblib.load(path)
 
-def predict_with_model(model, df: pd.DataFrame, threshold: float = 0.6) -> pd.DataFrame:
+
+def safe_predict(model, X: pd.DataFrame) -> (list, list):
     """
-    Run prediction and produce dataframe with columns:
-      - malicious_probability
-      - prediction (0/1)
-      - label (customizable later)
+    Return (probs, preds_int):
+    - probs: list of float probabilities (0..1) when possible, otherwise fallback to ints
+    - preds_int: 0/1 ints based on probs or direct predict
     """
-    # Ensure df is a DataFrame
+    if not isinstance(X, pd.DataFrame):
+        X = pd.DataFrame(X)
+
+    # Ensure columns numeric/filled if necessary (simple safety)
+    X_proc = X.copy().fillna(0)
+
+    # try predict_proba
+    try:
+        proba = model.predict_proba(X_proc)
+        # some estimators return shape (n_samples, ) or (n_samples, n_classes)
+        if proba.ndim == 1:
+            probs = [float(p) for p in proba]
+        else:
+            probs = [float(p) for p in proba[:, 1]]
+    except Exception:
+        # fallback: model.predict -> treat 1 as high confidence, 0 as low
+        try:
+            preds = model.predict(X_proc)
+            probs = [1.0 if int(p) == 1 else 0.0 for p in preds]
+        except Exception as e:
+            # last resort: mark everything unknown (0.0)
+            probs = [0.0] * len(X_proc)
+
+    preds_int = [1 if (p is not None and p >= 0.5) else 0 for p in probs]
+    return probs, preds_int
+
+
+def pad_features(df: pd.DataFrame, expected_cols: int = EXPECTED_FEATURES) -> pd.DataFrame:
+    """Pad dataframe with zero-valued dummy columns to match expected feature count."""
     if not isinstance(df, pd.DataFrame):
         df = pd.DataFrame(df)
-    # Try predict_proba
-    try:
-        probs = model.predict_proba(df)[:, 1]
-    except Exception:
-        # If unavailable, fallback to model.predict (not probabilistic)
-        preds = model.predict(df)
-        probs = [None] * len(preds)
-        # Convert to float probabilities if None later
-    preds = [1 if (p is not None and p >= threshold) else 0 for p in probs]
-    result_df = df.copy()
-    result_df["malicious_probability"] = [float(p) if p is not None else None for p in probs]
-    result_df["prediction_int"] = preds
-    return result_df
+    cur = df.shape[1]
+    if cur < expected_cols:
+        # add deterministic dummy names starting after existing columns
+        for i in range(expected_cols - cur):
+            df[f"dummy_{i}"] = 0
+    return df
 
-def df_to_download_bytes(df: pd.DataFrame, fmt: str = "csv"):
-    """Return bytes for download button (csv or json)."""
-    if fmt == "csv":
-        return df.to_csv(index=False).encode("utf-8")
-    else:
-        return df.to_json(orient="records").encode("utf-8")
+
+def map_severity_by_prob(prob: float) -> str:
+    """Map probability to severity label (used in 'Severity' preset)."""
+    # thresholds are adjustable; user can edit or later expose as settings
+    if prob >= 0.9:
+        return "HIGH"
+    if prob >= 0.7:
+        return "MEDIUM"
+    if prob >= 0.4:
+        return "LOW"
+    return "NORMAL"
+
 
 # ---------- Sidebar controls ----------
 with st.sidebar:
     st.title("⚙️ Controls")
-    st.markdown("Adjust labels, threshold, theme and other options.")
 
-    # Labels
-    benign_label = st.text_input("Label for benign traffic", value="BENIGN")
-    malicious_label = st.text_input("Label for malicious traffic", value="MALICIOUS")
+    st.markdown("**Label Preset**")
+    label_preset = st.selectbox(
+        "Choose a label preset",
+        options=["Binary (BENIGN / MALICIOUS)", "Severity (NORMAL/LOW/MEDIUM/HIGH)", "Custom labels"]
+    )
+
+    # if custom, let user set label(s)
+    if label_preset == "Custom labels":
+        st.markdown("Enter label(s) for 0 and 1 predictions:")
+        custom_label_0 = st.text_input("Label for prediction 0", value="BENIGN")
+        custom_label_1 = st.text_input("Label for prediction 1", value="MALICIOUS")
+    else:
+        custom_label_0 = None
+        custom_label_1 = None
+
+    # user may want to pick from common label pairs quickly (dropdown)
+    st.markdown("Or pick a quick pair:")
+    quick_pair = st.selectbox("Common pairs", options=["(BENIGN, MALICIOUS)", "(NORMAL, ATTACK)", "(GOOD, BAD)", "— none —"], index=0)
+    if quick_pair != "— none —" and label_preset == "Custom labels":
+        left, right = quick_pair.strip("()").split(",")
+        # only populate if custom preset chosen
+        custom_label_0 = custom_label_0 if custom_label_0 else left.strip()
+        custom_label_1 = custom_label_1 if custom_label_1 else right.strip()
 
     # Threshold
-    threshold = st.slider("Probability threshold for flagging as malicious", min_value=0.0, max_value=1.0, value=0.6, step=0.01)
+    threshold = st.slider("Probability threshold to treat as 'suspicious' (for metrics)", 0.0, 1.0, 0.60, 0.01)
 
-    # Theme selection (affects subtle colors in the app)
-    theme = st.selectbox("Theme", options=["Dark (default)", "Light (compact)"])
+    # Probability filter for table view
+    prob_filter = st.slider("Show only flows with probability >= ", 0.0, 1.0, 0.0, 0.01)
 
-    show_raw = st.checkbox("Show raw extracted features", value=False)
-    highlight_suspicious = st.checkbox("Highlight suspicious rows", value=True)
+    # top N suspicious rows to show
+    top_n = st.number_input("Top N suspicious flows to show", min_value=5, max_value=200, value=20, step=5)
+
+    show_raw = st.checkbox("Show raw extracted features (large tables)", value=False)
+    highlight_suspicious = st.checkbox("Highlight suspicious rows (table)", value=True)
     run_on_upload = st.checkbox("Auto-run detection on upload / sample", value=True)
 
     st.markdown("---")
-    st.markdown("**Quick actions**")
     if st.button("Run Detection Now 🔎"):
         st.session_state["force_run"] = True
 
     if st.button("Clear cached model"):
-        # clearing cached resource requires special handling in some Streamlit versions
         try:
-            del st.session_state["loaded_model"]
+            # For Streamlit versions: evict cached resource
+            st.cache_resource.clear()
         except Exception:
-            pass
+            # fallback: remove session var
+            if "loaded_model" in st.session_state:
+                del st.session_state["loaded_model"]
         st.experimental_rerun()
 
     st.markdown("---")
-    st.markdown("App built with ❤️ — tweak settings and explore results.")
+    st.markdown("App built with ❤️ — tweak settings to experiment.")
 
-# Load model (wrapped to show friendly error)
+
+# ---------- Load model ----------
 try:
     model = load_model()
 except FileNotFoundError as e:
-    st.error(f"Model missing: {e}")
+    st.error(f"Model missing at {MODEL_PATH}. Please upload or place the model file.")
     st.stop()
 except Exception as e:
     st.error(f"Error loading model: {e}")
@@ -154,159 +226,180 @@ except Exception as e:
 
 # ---------- Main layout ----------
 st.title("🛡️ AI-Powered Intrusion Detection System")
-st.markdown("Use the controls on the left to customize detection labels, threshold and display options.")
+st.markdown("Upload a PCAP, pick label scheme, and run the detection. Use the probability filter and top-N view to inspect high-risk flows.")
 
-# Two-column top: Upload + summary
-colA, colB = st.columns([2, 1])
+cols = st.columns([2, 1])
+with cols[0]:
+    st.subheader("1) Upload PCAP (or use default sample)")
+    uploaded = st.file_uploader("Upload PCAP (.pcap)", type=["pcap"])
+    sample_choice = st.selectbox("Or choose a sample", options=["Default sample (recommended)", "No sample / upload only"], index=0)
 
-with colA:
-    st.subheader("Upload PCAP or use sample")
-    uploaded_file = st.file_uploader("Upload a PCAP file (.pcap)", type=["pcap"], help="Drag-and-drop or click to select a PCAP.")
-    sample_choice = st.selectbox("Or choose a sample PCAP", options=["Use uploaded file", "Default sample"], index=1)
-
-    if uploaded_file is not None:
-        # Save uploaded to temp.pcap
-        temp_path = "temp.pcap"
-        with open(temp_path, "wb") as f:
-            f.write(uploaded_file.read())
-        pcap_path = temp_path
+    if uploaded is not None:
+        pcap_path = "temp_uploaded.pcap"
+        with open(pcap_path, "wb") as f:
+            f.write(uploaded.read())
     else:
-        pcap_path = DEFAULT_PCAP
+        pcap_path = DEFAULT_PCAP if sample_choice.startswith("Default") else None
 
-    # Run automatically if requested
-    do_run = st.session_state.get("force_run", False) or run_on_upload or st.button("Extract & Predict ▶️")
-    # Clear the forced flag after reading
-    st.session_state["force_run"] = False
+    st.markdown("**PCAP:**")
+    st.write(pcap_path if pcap_path else "No PCAP selected")
 
-    # Option: inspect file metadata
-    st.markdown("**PCAP file:**")
-    st.write(pcap_path)
-
-with colB:
-    st.subheader("Status & Quick Info")
+with cols[1]:
+    st.subheader("Model & Quick Info")
     st.markdown("<div class='card'>", unsafe_allow_html=True)
     st.markdown(f"- Model path: `{MODEL_PATH}`")
-    st.markdown(f"- Threshold: **{threshold:.2f}**")
-    st.markdown(f"- Labels: **{benign_label}** / **{malicious_label}**")
+    st.markdown(f"- Threshold (display): **{threshold:.2f}**")
     st.markdown("</div>", unsafe_allow_html=True)
 
-# ---------- Feature extraction + prediction ----------
-if do_run:
-    with st.spinner("Extracting features from PCAP (this may take a few seconds)... ⛏️"):
+# run toggle logic
+do_run = st.session_state.get("force_run", False) or (run_on_upload and pcap_path is not None) or st.button("Extract & Predict ▶️")
+st.session_state["force_run"] = False
+
+if not pcap_path:
+    st.info("No PCAP selected — upload a PCAP or choose the default sample to run detection.")
+
+# ---------- Feature extraction & prediction ----------
+if do_run and pcap_path:
+    with st.spinner("Extracting features from PCAP... ⛏️"):
         try:
             df = extract_features_from_pcap(pcap_path)
-            # basic sanity
             if df is None or df.shape[0] == 0:
-                st.warning("No flows/packets were parsed from the PCAP. Check the PCAP content.")
+                st.warning("No flows/packets parsed from the PCAP. Check the file content.")
+                st.stop()
         except Exception as e:
             st.exception(f"Feature extraction failed: {e}")
             st.stop()
 
-    # Ensure expected features (pad if needed) — keep original behavior
-    expected_features = 42
-    current_features = df.shape[1]
-    if current_features < expected_features:
-        for i in range(expected_features - current_features):
-            df[f"dummy_{i}"] = 0
+    # pad features to expected count
+    df = pad_features(df, EXPECTED_FEATURES)
 
-    # Run model prediction
+    # Run safe prediction
     with st.spinner("Running model inference... 🤖"):
-        try:
-            results_df = predict_with_model(model, df, threshold=threshold)
-        except Exception as e:
-            st.exception(f"Model prediction failed: {e}")
-            st.stop()
+        probs, preds_int = safe_predict(model, df)
 
-    # Map labels
-    results_df["label"] = results_df["prediction_int"].apply(lambda x: malicious_label if x == 1 else benign_label)
+    # add inference columns
+    results = df.copy().reset_index(drop=True)
+    results["malicious_probability"] = [float(p) for p in probs]
+    results["prediction_int"] = [int(x) for x in preds_int]
+    results["is_suspicious"] = results["malicious_probability"] >= threshold
 
-    # Metrics
-    total = len(results_df)
-    attacks = int(results_df["prediction_int"].sum())
+    # Map labels depending on preset
+    if label_preset == "Binary (BENIGN / MALICIOUS)":
+        lbl0, lbl1 = "BENIGN", "MALICIOUS"
+        results["label"] = results["prediction_int"].map({0: lbl0, 1: lbl1})
+    elif label_preset == "Severity (NORMAL/LOW/MEDIUM/HIGH)":
+        # severity determined by probability, independent of raw prediction (useful to grade risk)
+        results["label"] = results["malicious_probability"].apply(map_severity_by_prob)
+    else:  # custom labels
+        # use user-specified or fallback to defaults
+        lbl0 = custom_label_0 if custom_label_0 else "BENIGN"
+        lbl1 = custom_label_1 if custom_label_1 else "MALICIOUS"
+        results["label"] = results["prediction_int"].map({0: lbl0, 1: lbl1})
+
+    # basic metrics
+    total = len(results)
+    attacks = int(results["prediction_int"].sum())
     normals = total - attacks
-    attack_ratio = attacks / total if total > 0 else 0.0
+    attack_ratio = attacks / total if total else 0.0
 
-    # Threat level logic (customizable)
-    if attack_ratio < 0.1:
+    # threat level (simple heuristics)
+    if attack_ratio < 0.05:
+        threat = "VERY LOW"
+        color_emoji = "🟢"
+    elif attack_ratio < 0.15:
         threat = "LOW"
-        color = "🟢"
+        color_emoji = "🟢"
     elif attack_ratio < 0.3:
         threat = "MEDIUM"
-        color = "🟠"
+        color_emoji = "🟠"
     else:
         threat = "HIGH"
-        color = "🔴"
+        color_emoji = "🔴"
 
     # Top summary cards
     st.markdown("<div class='card'>", unsafe_allow_html=True)
-    s1, s2, s3, s4 = st.columns(4)
-    s1.metric("Total Flows/Rows", total, "📦")
-    s2.metric("Benign", normals, "✅")
-    s3.metric("Suspicious", attacks, "⚠️")
-    s4.metric("Threat Level", f"{threat} {color}", delta=f"{attack_ratio*100:.1f}%")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total Flows", total, "")
+    c2.metric("Benign / Normal", normals, "")
+    c3.metric("Suspicious / Alerts", attacks, "")
+    c4.metric("Threat Level", f"{threat} {color_emoji}", f"{attack_ratio*100:.2f}% of flows")
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Charts, distribution and probability visualization
-    st.subheader("Traffic Distribution")
-    dist_df = pd.DataFrame({"label": [benign_label, malicious_label], "count": [normals, attacks]})
+    # Visualization: Distribution and probability histogram
+    st.subheader("Traffic Overview")
+    dist_df = results.groupby("label").size().reset_index(name="count").sort_values("count", ascending=False)
     st.bar_chart(dist_df.set_index("label"))
 
-    st.subheader("Attack Probability — sample view")
-    prob_df = results_df[["malicious_probability"]].reset_index(drop=True)
-    st.line_chart(prob_df)
+    st.subheader("Probability Distribution (histogram)")
+    st.altair_chart(
+        # avoid extra dependency on seaborn; use Altair (already in many Streamlit environments)
+        __import__("altair").Chart(results).mark_bar().encode(
+            x=__import__("altair").X("malicious_probability:Q", bin=__import__("altair").Bin(maxbins=30)),
+            y="count()"
+        ).properties(height=200),
+        use_container_width=True
+    )
 
-    # Show the dataframe (with optional highlighting)
-    st.subheader("Detected Flows (sample view)")
-    if show_raw:
-        # Add a small highlight column if requested
-        if highlight_suspicious:
-            # Add color based on label (pandas style -> streamlit accepts styler)
-            def highlight_row(row):
-                return ["background-color: rgba(255,0,0,0.12)" if row["prediction_int"] == 1 else "" for _ in row]
-            try:
-                st.dataframe(results_df.style.apply(highlight_row, axis=1), height=320)
-            except Exception:
-                st.dataframe(results_df, height=320)
-        else:
-            st.dataframe(results_df, height=320)
+    # Probability line / sample sequence
+    st.subheader("Attack Probability Over Sample (first 100 rows)")
+    st.line_chart(results["malicious_probability"].head(100))
+
+    # Table with filtering
+    st.subheader("Detected Flows — Interactive View")
+    filtered = results[results["malicious_probability"] >= prob_filter].sort_values("malicious_probability", ascending=False)
+    if filtered.shape[0] == 0:
+        st.info("No flows match the current probability filter. Lower the filter or choose a different PCAP.")
     else:
-        # show key columns only
-        st.dataframe(results_df[["label", "malicious_probability", "prediction_int"]].rename(columns={
-            "malicious_probability":"probability", "prediction_int":"pred_int"
-        }), height=320)
+        # show top N suspicious flows (by probability)
+        top = filtered.head(top_n).copy()
+        # highlight suspicious rows visually using pandas styler if requested
+        if highlight_suspicious:
+            def _style_row(row):
+                bg = "rgba(255,0,0,0.12)" if row["is_suspicious"] else ""
+                return ["background: " + bg if col in top.columns else "" for col in row.index]
+            try:
+                st.dataframe(top.style.apply(lambda r: ["background-color: rgba(255,0,0,0.12)" if r["is_suspicious"] else "" for _ in r], axis=1), height=360)
+            except Exception:
+                st.dataframe(top, height=360)
+        else:
+            st.dataframe(top[["label", "malicious_probability", "prediction_int"] + ([c for c in top.columns if c.startswith("dummy_")][:3])], height=360)
 
-    # Row detail explorer
-    st.subheader("Inspect a single flow / row")
-    idx = st.number_input("Row index (0-based)", min_value=0, max_value=max(0, total-1), value=0, step=1)
+    # Inspect a single flow
+    st.subheader("Inspect a single flow / JSON view")
+    idx = st.number_input("Row index (0-based)", 0, max(0, total - 1), 0)
     if total > 0:
-        row = results_df.iloc[int(idx)].to_dict()
+        row = results.iloc[int(idx)].to_dict()
         st.json(row)
 
-    # Downloads and export
+    # Export: CSV & JSON & copyable JSON
     st.subheader("Export results")
-    csv_bytes = df_to_download_bytes(results_df, fmt="csv")
-    json_bytes = df_to_download_bytes(results_df, fmt="json")
+    csv_bytes = results.to_csv(index=False).encode("utf-8")
+    json_str = results.to_json(orient="records", indent=2)
     st.download_button("📥 Download CSV", csv_bytes, file_name="ai_ids_results.csv", mime="text/csv")
-    st.download_button("📥 Download JSON", json_bytes, file_name="ai_ids_results.json", mime="application/json")
+    st.download_button("📥 Download JSON", json_str.encode("utf-8"), file_name="ai_ids_results.json", mime="application/json")
+    if st.button("Copy JSON to clipboard (browser)"):
+        # streamlit can't directly access clipboard on server; provide JSON in a text area for manual copy
+        st.text_area("Copy the JSON below", value=json_str, height=260)
 
-    # Option to save predictions to models/predictions.csv locally
-    if st.button("💾 Save results to predictions.csv"):
+    # Optionally save locally on the server (useful for quick dev)
+    if st.button("💾 Save results to predictions.csv (server)"):
         out_path = "predictions.csv"
-        results_df.to_csv(out_path, index=False)
+        results.to_csv(out_path, index=False)
         st.success(f"Saved to {out_path}")
 
     st.success("Detection completed ✅")
 
-# show welcome + demo controls
 else:
+    # Welcome + demo controls
     st.markdown("<div class='card'>", unsafe_allow_html=True)
     st.header("Welcome 👋")
     st.markdown(
-        "This dashboard lets you upload PCAPs, extract features, and run an ML model to detect suspicious traffic. "
-        "Use the sidebar to customize labels and the detection threshold. Click **Run Detection Now** in the sidebar to start."
+        "This dashboard extracts features from PCAPs and runs a trained ML model to detect suspicious activity.\n\n"
+        "Use the **Label Preset** to choose how results are labeled (binary, severity by probability, or custom). "
+        "Upload a PCAP or use the default sample and click **Run Detection**."
     )
     st.markdown("</div>", unsafe_allow_html=True)
 
 # Footer
 st.markdown("---")
-st.markdown("<div class='footer'>Made with ❤️ by AI-IDS team — tweak the dashboard and explore the results.</div>", unsafe_allow_html=True)
+st.markdown("<div class='footer'>Made with ❤️ by the AI-IDS team — replace text & model as needed.</div>", unsafe_allow_html=True)
