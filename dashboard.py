@@ -1,8 +1,8 @@
 """
 dashboard.py — Updated AI-IDS Streamlit dashboard
-- Fixes dark text on dark background (metrics, table, buttons)
-- Adds responsive styling for mobile / tablet / desktop
-- Keeps previous functionality (label presets, safe predict, exports)
+- Fixes sidebar brightness bug so Soft-Dark theme keeps sidebar dark
+- Conservative, targeted CSS for dark & light themes
+- Responsive layout, safe model loading & prediction, exports
 """
 
 import os
@@ -24,17 +24,18 @@ st.set_page_config(
 
 MODEL_PATH = os.path.join("models", "ids_model.pkl")
 DEFAULT_PCAP = os.path.join("sample_pcaps", "2026-02-28-traffic-analysis-exercise.pcap")
-EXPECTED_FEATURES = 42  
+EXPECTED_FEATURES = 42  # adjust if your model expects a different count
 
 # ---------- Theme selector (top of sidebar) ----------
 with st.sidebar:
     ui_theme = st.selectbox("UI Theme", options=["Soft-Dark (recommended)", "Light (high-contrast)"], index=0)
 
 # ---------- CSS for both themes (safe, conservative) ----------
+# NOTE: the Soft CSS explicitly targets sidebar container and its panels so nothing inside stays white.
 _SOFT_DARK_CSS = r"""
 <style>
 :root{
-  --bg-start:#081224;
+  --bg-start:#07182a;
   --bg-end:#041022;
   --card: rgba(255,255,255,0.025);
   --control-bg: rgba(255,255,255,0.03);
@@ -43,7 +44,7 @@ _SOFT_DARK_CSS = r"""
   --accent-grad: linear-gradient(90deg,#5661d8,#14b8b6);
 }
 
-/* Page background + basic text (do not override every element) */
+/* Page background + basic text */
 .stApp {
   background: linear-gradient(90deg,var(--bg-start) 0%, var(--bg-end) 100%) !important;
   color: var(--text) !important;
@@ -59,12 +60,12 @@ _SOFT_DARK_CSS = r"""
   color: var(--text) !important;
 }
 
-/* Titles / paragraphs - slightly stronger */
+/* Headings / paragraphs */
 .stApp h1, .stApp h2, .stApp h3, .stApp p, .stApp label {
   color: var(--text) !important;
 }
 
-/* Metrics: label and value */
+/* Metrics */
 .stMetric .metric-label, .stMetric .metric-value {
   color: var(--text) !important;
 }
@@ -73,7 +74,7 @@ _SOFT_DARK_CSS = r"""
   font-weight: 600 !important;
 }
 
-/* Buttons & download buttons (clear, consistent) */
+/* Buttons */
 .stButton>button, .stDownloadButton>button, button {
   color: #ffffff !important;
   background-image: var(--accent-grad) !important;
@@ -81,19 +82,6 @@ _SOFT_DARK_CSS = r"""
   padding: 8px 12px !important;
   border-radius: 8px !important;
   box-shadow: 0 6px 16px rgba(2,6,23,0.45) !important;
-}
-
-/* Inputs / selects / textareas: dark background + readable text */
-input, textarea, select, option, .stTextInput>div>input, .stNumberInput>div>input {
-  background-color: var(--control-bg) !important;
-  color: var(--text) !important;
-  border: 1px solid rgba(255,255,255,0.05) !important;
-  border-radius: 6px !important;
-}
-
-/* Streamlit selectbox/listbox & widget label readability (best-effort) */
-div[role="combobox"], div[role="listbox"], div[role="button"] {
-  color: var(--text) !important;
 }
 
 /* DataFrame / table headers and cells */
@@ -107,20 +95,72 @@ div[data-testid="stDataFrameContainer"] table tbody td {
   background: rgba(255,255,255,0.01) !important;
 }
 
-/* Sidebar: darker panel and readable controls */
+/* -----------------------------
+   Sidebar: Explicit dark styling
+   (targets the sidebar container + immediate child panels)
+   ----------------------------- */
+
+/* Outer sidebar container */
 div[data-testid="stSidebar"] {
-  background: linear-gradient(180deg, rgba(2,10,18,0.92), rgba(4,16,34,0.95)) !important;
+  background: linear-gradient(180deg, rgba(2,10,18,0.95), rgba(4,16,34,0.98)) !important;
   color: var(--text) !important;
-  padding: 12px !important;
+  padding-top: 14px !important;
+  padding-bottom: 14px !important;
+  padding-left: 12px !important;
+  padding-right: 12px !important;
+  border-right: 1px solid rgba(255,255,255,0.02) !important;
 }
 
-/* Small text / footer */
+/* Sidebar internal panels (Streamlit wraps widgets in panel-like containers) */
+div[data-testid="stSidebar"] .block-container,
+div[data-testid="stSidebar"] .stMarkdown,
+div[data-testid="stSidebar"] .element-container,
+div[data-testid="stSidebar"] .stExpander {
+  background: transparent !important;    /* keep the sidebar dark and avoid white boxes */
+  color: var(--text) !important;
+}
+
+/* Sidebar widget inputs: give them the dark control background (not white) */
+div[data-testid="stSidebar"] input,
+div[data-testid="stSidebar"] textarea,
+div[data-testid="stSidebar"] select,
+div[data-testid="stSidebar"] option,
+div[data-testid="stSidebar"] .stTextInput>div>input,
+div[data-testid="stSidebar"] .stNumberInput>div>input,
+div[data-testid="stSidebar"] .stSelectbox>div {
+  background-color: var(--control-bg) !important;
+  color: var(--text) !important;
+  border: 1px solid rgba(255,255,255,0.04) !important;
+  border-radius: 6px !important;
+}
+
+/* Streamlit selectbox/listbox & widget label readability inside sidebar */
+div[data-testid="stSidebar"] div[role="combobox"],
+div[data-testid="stSidebar"] div[role="listbox"],
+div[data-testid="stSidebar"] div[role="button"] {
+  color: var(--text) !important;
+  background: rgba(255,255,255,0.02) !important;
+  border-radius: 6px !important;
+}
+
+/* Make sure sidebar headings, labels and small text are visible */
+div[data-testid="stSidebar"] h1, div[data-testid="stSidebar"] h2,
+div[data-testid="stSidebar"] label, div[data-testid="stSidebar"] p, div[data-testid="stSidebar"] span {
+  color: var(--text) !important;
+}
+
+/* ensure buttons inside sidebar are visible */
+div[data-testid="stSidebar"] .stButton>button, div[data-testid="stSidebar"] .stDownloadButton>button {
+  color: #ffffff !important;
+  background-image: linear-gradient(90deg,#4f6ef6,#0fb6b0) !important;
+}
+
+/* Footer */
 .footer { color: var(--muted) !important; font-size: 0.9rem !important; }
 
-/* Responsive: stack metrics/buttons for small screens */
+/* Responsive tweaks */
 @media (max-width: 880px) {
   .block-container { padding-left: 0.9rem !important; padding-right: 0.9rem !important; }
-  .stMetric .metric-value { font-size: 1.2rem !important; }
   .stButton>button, .stDownloadButton>button { width: 100% !important; display: block !important; }
 }
 </style>
@@ -131,30 +171,32 @@ _LIGHT_CSS = r"""
 :root{
   --bg: #ffffff;
   --card: #f7f9fb;
-  --text: #1b2430;      /* dark text on light background */
+  --text: #1b2430;
   --muted: #475569;
   --accent-grad: linear-gradient(90deg,#5661d8,#14b8b6);
 }
 
-/* Page */
+/* Page background + text */
 .stApp { background: var(--bg) !important; color: var(--text) !important; }
 
 /* Cards */
 .card { background: var(--card) !important; color: var(--text) !important; }
 
-/* Buttons readable on light bg */
+/* Buttons */
 .stButton>button, .stDownloadButton>button { color: #ffffff !important; background-image: var(--accent-grad) !important; }
 
-/* Inputs on light bg */
+/* Inputs */
 input, textarea, select, option { color: var(--text) !important; background: #fff; border: 1px solid rgba(27,36,48,0.06) !important; }
 
-/* Tables */
+/* DataFrame styles for light */
 div[data-testid="stDataFrameContainer"] table thead th { color: var(--text) !important; background: #f1f5f9 !important; }
 div[data-testid="stDataFrameContainer"] table tbody td { color: var(--text) !important; background: #fff !important; }
 
-/* Sidebar */
+/* Sidebar for light theme */
 div[data-testid="stSidebar"] { background: #f8fafc !important; color: var(--text) !important; }
-.footer { color: var(--muted) !important; }
+
+/* Footer */
+.footer { color: var(--muted) !important; font-size: 0.9rem !important; }
 </style>
 """
 
@@ -217,7 +259,6 @@ def map_severity_by_prob(prob: float) -> str:
         return "LOW"
     return "NORMAL"
 
-
 # ---------- Sidebar controls (main) ----------
 with st.sidebar:
     st.title("⚙️ Controls (Main)")
@@ -257,10 +298,8 @@ with st.sidebar:
 
     if st.button("Clear cached model"):
         try:
-            # best-effort: clear the cached model resource
             st.cache_resource.clear()
         except Exception:
-            # fallback: clear session variable
             if "loaded_model" in st.session_state:
                 del st.session_state["loaded_model"]
         st.experimental_rerun()
