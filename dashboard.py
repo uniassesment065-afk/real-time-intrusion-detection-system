@@ -482,4 +482,4 @@ else:
     st.markdown("</div>", unsafe_allow_html=True)
 
 st.markdown("---")
-st.markdown("<div class='footer'>Made with ❤️ by the AI-IDS team — replace text & model as needed.</div>", unsafe_allow_html=True)
+st.markdown("<div class='footer'>Made with ❤️ by the AI-IDS team</div>", unsafe_allow_html=True)
