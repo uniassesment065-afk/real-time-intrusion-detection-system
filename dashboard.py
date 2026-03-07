@@ -26,114 +26,140 @@ MODEL_PATH = os.path.join("models", "ids_model.pkl")
 DEFAULT_PCAP = os.path.join("sample_pcaps", "2026-02-28-traffic-analysis-exercise.pcap")
 EXPECTED_FEATURES = 42  # change if your model expects a different number
 
-# ---------- Robust CSS  ----------
-# NOTE: we intentionally target many elements so Streamlit's generated classnames are covered.
-st.markdown(
-    """
+# ---------- Theme selector (top of sidebar) ----------
+with st.sidebar:
+    ui_theme = st.selectbox("UI Theme", options=["Soft-Dark (recommended)", "Light (high-contrast)"], index=0)
+
+# ---------- CSS for both themes (safe, conservative) ----------
+_SOFT_DARK_CSS = r"""
 <style>
-/* ---------- Page base (softer text color) ---------- */
-.stApp {
-  background: linear-gradient(90deg,#081224 0%, #041022 100%);
-  color: #dbe9ff; /* softer than stark white */
+:root{
+  --bg-start:#081224;
+  --bg-end:#041022;
+  --card: rgba(255,255,255,0.025);
+  --control-bg: rgba(255,255,255,0.03);
+  --text: #d4e8ff;        /* soft light text */
+  --muted: #9fb4d8;
+  --accent-grad: linear-gradient(90deg,#5661d8,#14b8b6);
 }
 
-/* ---------- Card container (safe) ---------- */
+/* Page background + basic text (do not override every element) */
+.stApp {
+  background: linear-gradient(90deg,var(--bg-start) 0%, var(--bg-end) 100%) !important;
+  color: var(--text) !important;
+}
+
+/* Card containers */
 .card {
-  background: rgba(255,255,255,0.026);
+  background: var(--card) !important;
   border-radius: 10px;
   padding: 12px;
   margin-bottom: 12px;
-  box-shadow: 0 4px 18px rgba(0,0,0,0.35);
+  box-shadow: 0 6px 20px rgba(0,0,0,0.45);
+  color: var(--text) !important;
 }
 
-/* ---------- Headings & general text (targeted) ---------- */
-/* Avoid global * selector — target common element types only */
-.stApp h1, .stApp h2, .stApp h3,
-.stApp p, .stApp label, .stApp span, .stApp div, .stApp li {
-  color: #dbe9ff !important;
+/* Titles / paragraphs - slightly stronger */
+.stApp h1, .stApp h2, .stApp h3, .stApp p, .stApp label {
+  color: var(--text) !important;
 }
 
-/* ---------- Metrics (label + value) ---------- */
-.stMetric .metric-label, .stMetric .metric-value,
-.metric-label, .metric-value {
-  color: #e8f4ff !important;
+/* Metrics: label and value */
+.stMetric .metric-label, .stMetric .metric-value {
+  color: var(--text) !important;
 }
-.stMetric .metric-value, .metric-value {
-  font-size: 1.4rem !important;
+.stMetric .metric-value {
+  font-size: 1.45rem !important;
   font-weight: 600 !important;
 }
 
-/* ---------- Buttons & download buttons (readable, but not blinding) ---------- */
+/* Buttons & download buttons (clear, consistent) */
 .stButton>button, .stDownloadButton>button, button {
   color: #ffffff !important;
-  background-image: linear-gradient(90deg,#5661d8,#14b8b6) !important;
+  background-image: var(--accent-grad) !important;
   border: none !important;
-  box-shadow: 0 6px 14px rgba(2,6,23,0.45) !important;
   padding: 8px 12px !important;
   border-radius: 8px !important;
-}
-.stButton>button span, .stDownloadButton>button span {
-  color: #ffffff !important;
-  font-weight: 600;
+  box-shadow: 0 6px 16px rgba(2,6,23,0.45) !important;
 }
 
-/* ---------- Inputs / selects / textareas (ensure visibility) ---------- */
-/* Generic inputs so text inside is visible without changing internal layout too much */
-input, textarea, select, option {
-  color: #dbe9ff !important;
-  background-color: rgba(255,255,255,0.02) !important;
-  border: 1px solid rgba(255,255,255,0.04) !important;
-  border-radius: 6px;
+/* Inputs / selects / textareas: dark background + readable text */
+input, textarea, select, option, .stTextInput>div>input, .stNumberInput>div>input {
+  background-color: var(--control-bg) !important;
+  color: var(--text) !important;
+  border: 1px solid rgba(255,255,255,0.05) !important;
+  border-radius: 6px !important;
 }
 
-/* Streamlit-specific widget input targeting (best-effort, non-invasive) */
-div[data-testid="stTextInput"] input,
-div[data-testid="stTextArea"] textarea,
-div[data-testid="stNumberInput"] input,
-div[data-testid="stSelectbox"] div[role="button"] {
-  color: #dbe9ff !important;
+/* Streamlit selectbox/listbox & widget label readability (best-effort) */
+div[role="combobox"], div[role="listbox"], div[role="button"] {
+  color: var(--text) !important;
 }
 
-/* ---------- DataFrame / table styling ---------- */
+/* DataFrame / table headers and cells */
 div[data-testid="stDataFrameContainer"] table thead th {
-  color: #e8f4ff !important;
-  background: rgba(255,255,255,0.028) !important;
+  color: var(--text) !important;
+  background: rgba(255,255,255,0.03) !important;
   border-bottom: 1px solid rgba(255,255,255,0.04) !important;
 }
 div[data-testid="stDataFrameContainer"] table tbody td {
-  color: #dbe9ff !important;
+  color: var(--text) !important;
   background: rgba(255,255,255,0.01) !important;
 }
 
-/* ---------- Sidebar styling (non-invasive) ---------- */
+/* Sidebar: darker panel and readable controls */
 div[data-testid="stSidebar"] {
-  background: linear-gradient(180deg, rgba(0,0,0,0.06), rgba(255,255,255,0.00)) !important;
-  color: #dbe9ff !important;
-}
-div[data-testid="stSidebar"] label,
-div[data-testid="stSidebar"] p,
-div[data-testid="stSidebar"] span,
-div[data-testid="stSidebar"] .stText {
-  color: #dbe9ff !important;
+  background: linear-gradient(180deg, rgba(2,10,18,0.92), rgba(4,16,34,0.95)) !important;
+  color: var(--text) !important;
+  padding: 12px !important;
 }
 
-/* ---------- Footer / small text ---------- */
-.footer { color: #9fb4d8 !important; font-size: 0.9em !important; }
+/* Small text / footer */
+.footer { color: var(--muted) !important; font-size: 0.9rem !important; }
 
-/* ---------- Responsive behavior (stack on small screens) ---------- */
+/* Responsive: stack metrics/buttons for small screens */
 @media (max-width: 880px) {
   .block-container { padding-left: 0.9rem !important; padding-right: 0.9rem !important; }
+  .stMetric .metric-value { font-size: 1.2rem !important; }
   .stButton>button, .stDownloadButton>button { width: 100% !important; display: block !important; }
 }
-@media (max-width: 520px) {
-  .stMetric .metric-value { font-size: 1.2rem !important; }
-  .card { padding: 10px !important; }
-  .stButton>button, .stDownloadButton>button { padding: 10px 14px !important; }
-}
 </style>
-    """,
-    unsafe_allow_html=True,
-)
+"""
+
+_LIGHT_CSS = r"""
+<style>
+:root{
+  --bg: #ffffff;
+  --card: #f7f9fb;
+  --text: #1b2430;      /* dark text on light background */
+  --muted: #475569;
+  --accent-grad: linear-gradient(90deg,#5661d8,#14b8b6);
+}
+
+/* Page */
+.stApp { background: var(--bg) !important; color: var(--text) !important; }
+
+/* Cards */
+.card { background: var(--card) !important; color: var(--text) !important; }
+
+/* Buttons readable on light bg */
+.stButton>button, .stDownloadButton>button { color: #ffffff !important; background-image: var(--accent-grad) !important; }
+
+/* Inputs on light bg */
+input, textarea, select, option { color: var(--text) !important; background: #fff; border: 1px solid rgba(27,36,48,0.06) !important; }
+
+/* Tables */
+div[data-testid="stDataFrameContainer"] table thead th { color: var(--text) !important; background: #f1f5f9 !important; }
+div[data-testid="stDataFrameContainer"] table tbody td { color: var(--text) !important; background: #fff !important; }
+
+/* Sidebar */
+div[data-testid="stSidebar"] { background: #f8fafc !important; color: var(--text) !important; }
+.footer { color: var(--muted) !important; }
+</style>
+"""
+
+# Inject the chosen CSS
+st.markdown(_SOFT_DARK_CSS if ui_theme.startswith("Soft") else _LIGHT_CSS, unsafe_allow_html=True)
 
 # ---------- Utilities ----------
 @st.cache_resource
@@ -192,9 +218,9 @@ def map_severity_by_prob(prob: float) -> str:
     return "NORMAL"
 
 
-# ---------- Sidebar controls ----------
+# ---------- Sidebar controls (main) ----------
 with st.sidebar:
-    st.title("⚙️ Controls")
+    st.title("⚙️ Controls (Main)")
 
     st.markdown("**Label Preset**")
     label_preset = st.selectbox(
@@ -231,15 +257,16 @@ with st.sidebar:
 
     if st.button("Clear cached model"):
         try:
+            # best-effort: clear the cached model resource
             st.cache_resource.clear()
         except Exception:
+            # fallback: clear session variable
             if "loaded_model" in st.session_state:
                 del st.session_state["loaded_model"]
         st.experimental_rerun()
 
     st.markdown("---")
     st.markdown("App built with ❤️ — tweak settings to experiment.")
-
 
 # ---------- Load model ----------
 try:
