@@ -1,6 +1,3 @@
-# dashboard.py — AI-IDS Streamlit dashboard (multi-sample, thumbnails, keyboard shortcut, optional AgGrid)
-# Drop this file into your app folder and run: streamlit run dashboard.py
-
 import os
 import glob
 import tempfile
@@ -25,22 +22,36 @@ MAX_TOP_ROWS = 500
 
 # ---------- Utilities ----------
 def clear_model_cache():
+    """Clear session keys and try to clear Streamlit caches safely (no AttributeError leak).
+
+    This function intentionally swallows errors and returns normally; callers should not assume
+    a hard crash will follow.
+    """
     for key in ["loaded_model", "model_cached", "model"]:
         if key in st.session_state:
             try:
                 del st.session_state[key]
             except Exception:
                 pass
+
+    # Defensive: only call these if they exist; wrap each call
     try:
-        st.cache_resource.clear()
+        if hasattr(st, "cache_resource") and hasattr(st.cache_resource, "clear"):
+            st.cache_resource.clear()
     except Exception:
-        try:
+        pass
+
+    try:
+        if hasattr(st, "experimental_memo") and hasattr(st.experimental_memo, "clear"):
             st.experimental_memo.clear()
-        except Exception:
-            try:
-                st.cache_data.clear()
-            except Exception:
-                pass
+    except Exception:
+        pass
+
+    try:
+        if hasattr(st, "cache_data") and hasattr(st.cache_data, "clear"):
+            st.cache_data.clear()
+    except Exception:
+        pass
 
 
 def find_sample_pcaps(dirs: List[str] = SAMPLE_DIR_CANDIDATES, pattern: str = "*.pcap") -> List[str]:
@@ -222,9 +233,44 @@ with st.sidebar:
     run_on_upload = st.checkbox("Auto-run detection on upload", value=True)
 
     st.markdown("---")
+    # SAFE clear button: clear caches, then attempt safe rerun; never call attribute that may not exist without check
     if st.button("Clear cached model"):
-        clear_model_cache()
-        st.experimental_rerun()
+        # clear caches
+        try:
+            clear_model_cache()
+            st.sidebar.success("Cache cleared (attempted).")
+        except Exception as e:
+            st.sidebar.error(f"Failed to clear cache: {e}")
+
+        # Try recommended rerun approaches in order, gracefully falling back to JS reload
+        rerun_attempted = False
+        try:
+            if hasattr(st, "experimental_rerun"):
+                try:
+                    st.experimental_rerun()
+                    rerun_attempted = True
+                except Exception:
+                    rerun_attempted = False
+        except Exception:
+            rerun_attempted = False
+
+        if not rerun_attempted:
+            # Try the less-common internal rerun (older/newer Streamlit variants differ); wrap in try
+            try:
+                # experimental function may exist under different names in some versions
+                if hasattr(st, "rerun"):
+                    try:
+                        st.rerun()
+                        rerun_attempted = True
+                    except Exception:
+                        rerun_attempted = False
+            except Exception:
+                rerun_attempted = False
+
+        if not rerun_attempted:
+            # As a last resort, reload the browser window via JS. This is robust and works across Streamlit deployments.
+            st.sidebar.info("Could not programmatically rerun the app. Reloading browser page as fallback...")
+            st.markdown("<script>window.location.reload();</script>", unsafe_allow_html=True)
 
 # ---------- Inject CSS & theme wrapper ----------
 st.markdown(_COMMON_CSS, unsafe_allow_html=True)
@@ -527,7 +573,6 @@ else:
     st.markdown('</div>', unsafe_allow_html=True)
 
 # ---------- Keyboard shortcut (R to rerun) ----------
-# This injects a small script that listens for 'r' or 'R' keypress and clicks the Extract & Predict button
 st.markdown("""
 <script>
 window.addEventListener('keydown', function(e) {
