@@ -44,6 +44,7 @@ def predict_traffic(
     """
     model = load_model(model_path)
 
+
     # Ensure input is a DataFrame
     if not isinstance(sample_data, pd.DataFrame):
         sample_data = pd.DataFrame(sample_data)
