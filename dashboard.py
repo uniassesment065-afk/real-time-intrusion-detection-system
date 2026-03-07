@@ -26,118 +26,105 @@ MODEL_PATH = os.path.join("models", "ids_model.pkl")
 DEFAULT_PCAP = os.path.join("sample_pcaps", "2026-02-28-traffic-analysis-exercise.pcap")
 EXPECTED_FEATURES = 42  # change if your model expects a different number
 
-# ---------- Robust CSS (high-contrast + responsive) ----------
+# ---------- Robust CSS  ----------
 # NOTE: we intentionally target many elements so Streamlit's generated classnames are covered.
 st.markdown(
     """
-    <style>
-    /* Page background and global text color */
-    .stApp {
-        background: linear-gradient(90deg,#081224 0%, #041022 100%);
-        color: #e6eef8;
-    }
+<style>
+/* ---------- Global page + base text ---------- */
+.stApp {
+  background: linear-gradient(90deg,#081224 0%, #041022 100%);
+  color: #e6eef8;
+}
 
-    /* Block container padding for smaller screens */
-    .block-container {
-        padding-left: 1.25rem;
-        padding-right: 1.25rem;
-    }
+/* Make virtually everything use the same high-contrast color */
+.stApp, .stApp * {
+  color: #e6eef8 !important;
+  -webkit-text-fill-color: #e6eef8 !important;
+}
 
-    /* Card look */
-    .card {
-        background: rgba(255,255,255,0.03);
-        border-radius: 12px;
-        padding: 14px;
-        margin-bottom: 14px;
-        box-shadow: 0 6px 24px rgba(0,0,0,0.45);
-    }
+/* ---------- Card container ---------- */
+.card {
+  background: rgba(255,255,255,0.03);
+  border-radius: 12px;
+  padding: 12px;
+  margin-bottom: 12px;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.45);
+}
 
-    /* Headings, paragraphs, and small text - force high contrast */
-    .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5,
-    .stApp p, .stApp span, .stApp label, .stApp div, .stApp li,
-    .stApp a, .stApp small, .stApp strong {
-        color: #e6eef8 !important;
-    }
+/* ---------- Metrics (labels + values) ---------- */
+.stMetric .metric-label, .stMetric .metric-value,
+.metric-label, .metric-value {
+  color: #e6eef8 !important;
+}
+.stMetric .metric-value, .metric-value {
+  font-size: 1.5rem !important;
+  font-weight: 600 !important;
+}
 
-    /* Metrics - label and value styling (bigger & bright) */
-    .stMetric, .stMetric .metric-label, .stMetric .metric-value,
-    .metric-label, .metric-value, .stMetric > div {
-        color: #e6eef8 !important;
-    }
-    /* improve metric font sizes where possible */
-    .stMetric .metric-value, .metric-value {
-        font-size: 1.6rem !important;
-        font-weight: 600 !important;
-    }
-    .stMetric .metric-label, .metric-label {
-        font-size: 0.95rem !important;
-        opacity: 0.95 !important;
-    }
+/* ---------- Buttons & download buttons ---------- */
+.stButton>button, .stDownloadButton>button, button {
+  color: #ffffff !important;
+  background-image: linear-gradient(90deg,#6366f1,#06b6d4) !important;
+  border: none !important;
+  box-shadow: 0 6px 18px rgba(3,7,18,0.6) !important;
+  padding: 8px 12px !important;
+}
+.stButton>button span, .stDownloadButton>button span {
+  color: #ffffff !important;
+}
 
-    /* Table (pandas/st.dataframe) header and cells */
-    div[data-testid="stDataFrameContainer"] table thead th {
-        color: #e6eef8 !important;
-        background: rgba(255,255,255,0.04) !important;
-        border-bottom: 1px solid rgba(255,255,255,0.05) !important;
-    }
-    div[data-testid="stDataFrameContainer"] table tbody td {
-        color: #e6eef8 !important;
-        background: rgba(255,255,255,0.02) !important;
-        border-bottom: 1px solid rgba(255,255,255,0.02) !important;
-    }
+/* ---------- Inputs / selects / textareas ---------- */
+/* Generic inputs/select/textarea so text inside is visible */
+input, textarea, select, option {
+  color: #e6eef8 !important;
+  background-color: rgba(255,255,255,0.03) !important;
+  border: 1px solid rgba(255,255,255,0.06) !important;
+}
 
-    /* Buttons (including download buttons) */
-    button, .stButton>button, .stDownloadButton>button, .css-1v3fvcr button {
-        color: white !important;
-        background-image: linear-gradient(90deg,#6366f1,#06b6d4) !important;
-        border: none !important;
-        box-shadow: 0 6px 18px rgba(3,7,18,0.6) !important;
-    }
-    /* Hover & focus for buttons */
-    .stButton>button:hover, .stDownloadButton>button:hover {
-        filter: brightness(1.05) !important;
-    }
+/* Streamlit widget inner inputs (best effort selectors) */
+div[data-testid="stTextInput"] input,
+div[data-testid="stTextArea"] textarea,
+div[data-testid="stSelectbox"] div[role="listbox"],
+div[data-testid="stNumberInput"] input {
+  color: #e6eef8 !important;
+}
 
-    /* Give download link text inside button full contrast */
-    .stDownloadButton > button > span, .stButton > button > span {
-        color: #fff !important;
-    }
+/* ---------- DataFrame / table styling ---------- */
+div[data-testid="stDataFrameContainer"] table thead th {
+  color: #e6eef8 !important;
+  background: rgba(255,255,255,0.04) !important;
+  border-bottom: 1px solid rgba(255,255,255,0.06) !important;
+}
+div[data-testid="stDataFrameContainer"] table tbody td {
+  color: #e6eef8 !important;
+  background: rgba(255,255,255,0.02) !important;
+}
 
-    /* Card small labels */
-    .card small, .card p, .card span {
-        color: #dfeeff !important;
-    }
+/* ---------- Sidebar (explicitly target sidebar container) ---------- */
+div[data-testid="stSidebar"] {
+  background: linear-gradient(180deg, rgba(0,0,0,0.12), rgba(255,255,255,0.01)) !important;
+  color: #e6eef8 !important;
+}
 
-    /* Footer */
-    .footer {
-        color: #9aaed6;
-        font-size: 0.9em;
-        margin-top: 12px;
-    }
+/* Ensure labels inside forms and sidebar are readable */
+div[data-testid="stSidebar"] label, div[data-testid="stSidebar"] p, div[data-testid="stSidebar"] span {
+  color: #e6eef8 !important;
+}
 
-    /* Responsive rules (stack columns on small screens) */
-    @media (max-width: 880px) {
-        /* reduce container padding */
-        .block-container {
-            padding-left: 0.75rem;
-            padding-right: 0.75rem;
-        }
-        /* full width charts/data on mobile */
-        .element-container, .stPlotlyChart, .stChart, .stGraph {
-            width: 100% !important;
-        }
-        /* make sidebar controls more compact */
-        .css-1lcbmhc { padding: 8px !important; } /* best-effort */
-    }
+/* ---------- Small text / footer ---------- */
+.footer { color: #9aaed6 !important; font-size: 0.9em !important; }
 
-    @media (max-width: 520px) {
-        /* stack top metrics vertically on very small screens */
-        .stMetric { display: block !important; width: 100% !important; }
-        .card { padding: 10px !important; }
-        .stButton>button, .stDownloadButton>button { width: 100% !important; }
-    }
-
-    </style>
+/* ---------- Responsive: stack and padding tweaks ---------- */
+@media (max-width: 880px) {
+  .block-container { padding-left: 0.9rem !important; padding-right: 0.9rem !important; }
+  .stButton>button, .stDownloadButton>button { width: 100% !important; display: block !important; }
+}
+@media (max-width: 520px) {
+  .stMetric .metric-value { font-size: 1.3rem !important; }
+  .card { padding: 10px !important; }
+}
+</style>
     """,
     unsafe_allow_html=True,
 )
