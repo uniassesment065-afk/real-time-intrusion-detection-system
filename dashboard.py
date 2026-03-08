@@ -4,10 +4,10 @@ import tempfile
 import joblib
 from typing import Optional, List, Dict, Any
 import time
-
+from src.predict import predict_traffic
 import pandas as pd
 import streamlit as st
-
+from src.predict import align_pcap_df_to_model
 from pcap_feature_extractor import extract_features_from_pcap
 
 # ---------- Page config ----------
@@ -489,18 +489,29 @@ if do_run and pcap_path and model is not None:
     with st.spinner("Extracting features from PCAP... ⛏️"):
         try:
             num_flows = st.sidebar.number_input("Max flows to extract from PCAP", min_value=10, max_value=500, value=50, step=10)
-            df = extract_features_from_pcap(pcap_path, num_packets=num_flows)
-            if df is None or df.shape[0] == 0:
+            raw_df = extract_features_from_pcap(pcap_path, num_packets=num_flows)
+            if raw_df is None or raw_df.shape[0] == 0:
                 st.warning("No flows parsed from PCAP. Check the file content.")
                 st.stop()
         except Exception as e:
             st.exception(f"Feature extraction failed: {e}")
             st.stop()
 
-    df = pad_features(df, EXPECTED_FEATURES)
+    # Align extracted PCAP features to the model's expected feature names (bridge adapter)
+    aligned_df = align_pcap_df_to_model(raw_df, model, train_csv="data/UNSW_NB15_training-set.csv")
+
+    # pad / reorder columns as before
+    df = pad_features(aligned_df, EXPECTED_FEATURES)
 
     with st.spinner("Running model inference... 🤖"):
-        probs, preds_int = safe_predict(model, df)
+        try:
+            results_list = predict_traffic(df, model_path=MODEL_PATH, pipeline_path="models/pipeline_ids.pkl", threshold=threshold)
+            probs = [r["malicious_probability"] for r in results_list]
+            preds_int = [1 if r["prediction"] != "BENIGN" and r["malicious_probability"] is not None else 0 for r in results_list]
+        except Exception as e:
+            st.error(f"Inference failed: {e}")
+            probs = [0.0] * len(df)
+            preds_int = [0] * len(df)
 
     results = df.copy().reset_index(drop=True)
     results["malicious_probability"] = [float(p) for p in probs]
