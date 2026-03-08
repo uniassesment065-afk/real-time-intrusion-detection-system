@@ -9,17 +9,20 @@ try:
 except:
     model = None
 
-def detect_pcap(pcap_file):
-    df = extract_features_from_pcap(pcap_file)
+def detect_pcap(pcap_file, num_packets=50):  
+    # Extract features from pcap
+    df = extract_features_from_pcap(pcap_file, num_packets=num_packets)
+    
     if model:
         try:
-            preds = model.predict_proba(df)[:,1]
+            preds = model.predict_proba(df)[:, 1]
         except:
-            # Shape mismatch, fallback to dummy prediction
+            # Shape mismatch or model error
             preds = np.zeros(len(df))
     else:
         preds = np.zeros(len(df))
     
+    # Build results list
     results = []
     for p in preds:
         results.append({
@@ -31,4 +34,4 @@ def detect_pcap(pcap_file):
 if __name__ == "__main__":
     import sys
     pcap_file = sys.argv[1] if len(sys.argv) > 1 else "sample.pcap"
-    print(detect_pcap(pcap_file))
+    print(detect_pcap(pcap_file, num_packets=50))

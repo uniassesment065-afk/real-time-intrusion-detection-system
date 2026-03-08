@@ -488,7 +488,8 @@ if not pcap_path:
 if do_run and pcap_path and model is not None:
     with st.spinner("Extracting features from PCAP... ⛏️"):
         try:
-            df = extract_features_from_pcap(pcap_path)
+            num_flows = st.sidebar.number_input("Max flows to extract from PCAP", min_value=10, max_value=500, value=50, step=10)
+            df = extract_features_from_pcap(pcap_path, num_packets=num_flows)
             if df is None or df.shape[0] == 0:
                 st.warning("No flows parsed from PCAP. Check the file content.")
                 st.stop()
